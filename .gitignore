@@ -12,3 +12,4 @@ CLAUDE.md
 .agents/
 skyseg.onnx
 *.mp4
+*.pdf
