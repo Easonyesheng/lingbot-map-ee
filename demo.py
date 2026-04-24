@@ -346,6 +346,8 @@ def main():
     parser.add_argument("--conf_threshold", type=float, default=1.5)
     parser.add_argument("--downsample_factor", type=int, default=10)
     parser.add_argument("--point_size", type=float, default=0.00001)
+    parser.add_argument("--no_vis", action="store_true",
+                        help="Skip launching the 3D viewer and exit after inference")
     parser.add_argument("--mask_sky", action="store_true", help="Apply sky segmentation to filter out sky points")
     parser.add_argument("--sky_mask_dir", type=str, default=None,
                         help="Directory for cached sky masks (default: <image_folder>_sky_masks/)")
@@ -496,6 +498,11 @@ def main():
         images_for_post = images
 
     predictions, images_cpu = postprocess(predictions, images_for_post)
+
+    if args.no_vis:
+        print("Skipping visualization (--no_vis).")
+        print(f"Predictions contain keys: {list(predictions.keys())}")
+        return
 
     # ── Visualize ────────────────────────────────────────────────────────────
     try:

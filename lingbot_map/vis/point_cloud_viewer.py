@@ -306,12 +306,17 @@ class PointCloudViewer:
         # Video frame display controls — kept at top so the current frame is always visible
         with self.server.gui.add_folder("Video Display"):
             self.show_video_checkbox = self.server.gui.add_checkbox("Show Current Frame", initial_value=True)
+            self.current_frame_image = None
+            self._supports_gui_image = hasattr(self.server.gui, "add_image")
             if hasattr(self, 'original_images') and len(self.original_images) > 0:
-                self.current_frame_image = self.server.gui.add_image(
-                    self.original_images[0], label="Current Frame"
-                )
-            else:
-                self.current_frame_image = None
+                if self._supports_gui_image:
+                    self.current_frame_image = self.server.gui.add_image(
+                        self.original_images[0], label="Current Frame"
+                    )
+                else:
+                    self.server.gui.add_markdown(
+                        "Current-frame image preview is unavailable in this viser version."
+                    )
 
         # Preset view direction buttons
         with self.server.gui.add_folder("Reset View Direction"):
@@ -1203,7 +1208,9 @@ class PointCloudViewer:
 
             if self.current_frame_image is not None and hasattr(self, 'original_images'):
                 if current_timestep < len(self.original_images):
-                    self.current_frame_image.image = self.original_images[current_timestep]
+                    # Newer viser uses an image handle with `.image`.
+                    if hasattr(self.current_frame_image, "image"):
+                        self.current_frame_image.image = self.original_images[current_timestep]
 
             with self.server.atomic():
                 self.frame_nodes[current_timestep].visible = True

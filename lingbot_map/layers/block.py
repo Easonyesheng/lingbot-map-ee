@@ -18,7 +18,17 @@ from torch import nn, Tensor
 
 from .attention import Attention, CausalAttention, FlashInferAttention, SDPAAttention
 from functools import lru_cache, partial
-from torch.nn.attention.flex_attention import BlockMask, create_mask
+try:
+    from torch.nn.attention.flex_attention import BlockMask, create_mask
+except ImportError:
+    # Older PyTorch builds do not expose flex_attention. Fall back to a dense
+    # boolean mask so camera attention can still run with SDPA.
+    BlockMask = Tensor
+
+    def create_mask(mask_fn, B=None, H=None, Q_LEN=0, KV_LEN=0, device=None):
+        q_idx = torch.arange(Q_LEN, device=device, dtype=torch.long).view(Q_LEN, 1)
+        kv_idx = torch.arange(KV_LEN, device=device, dtype=torch.long).view(1, KV_LEN)
+        return mask_fn(B, H, q_idx, kv_idx)
 from .drop_path import DropPath
 from .layer_scale import LayerScale
 from .mlp import Mlp

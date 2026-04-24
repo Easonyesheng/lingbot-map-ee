@@ -14,6 +14,7 @@ import torch.nn as nn
 from typing import Optional, Tuple, List
 
 from lingbot_map.layers.block import Block, FlashInferBlock, SDPABlock
+from lingbot_map.layers.attention import FLASHINFER_AVAILABLE
 from lingbot_map.layers.rope import WanRotaryPosEmbed
 from lingbot_map.aggregator.base import AggregatorBase, slice_expand_and_flatten
 
@@ -87,6 +88,14 @@ class AggregatorStream(AggregatorBase):
         use_flashinfer = kwargs.pop('use_flashinfer', True)
         kwargs.pop('use_flexflash', None)
         use_sdpa = kwargs.pop('use_sdpa', False)
+
+        # Auto-fallback: if FlashInfer is requested but unavailable in this env,
+        # transparently switch to the SDPA path so model construction can proceed.
+        if not use_sdpa and use_flashinfer and not FLASHINFER_AVAILABLE:
+            logger.warning(
+                "FlashInfer requested but not available; falling back to SDPA backend."
+            )
+            use_sdpa = True
 
         # Backend selection: SDPA (no extra deps) or FlashInfer (paged KV cache)
         self.use_sdpa = use_sdpa
