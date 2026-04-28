@@ -21,6 +21,7 @@ Usage:
 import argparse
 import glob
 import os
+import tempfile
 import time
 
 # Must be set before `import torch` / any CUDA init. Reduces the reserved-vs-allocated
@@ -31,6 +32,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 import cv2
 import numpy as np
 import torch
+from PIL import Image
 from tqdm.auto import tqdm
 
 from lingbot_map.utils.pose_enc import pose_encoding_to_extri_intri
@@ -42,8 +44,9 @@ from lingbot_map.utils.load_fn import load_and_preprocess_images
 # Image loading
 # =============================================================================
 
-def load_images(image_folder=None, video_path=None, fps=10, image_ext=".jpg,.png",
-                first_k=None, stride=1, image_size=518, patch_size=14, num_workers=8):
+def load_images(image_folder=None, video_path=None, fps=10, image_ext=".jpg,.png,.JPG",
+                first_k=None, stride=1, image_size=518, patch_size=14, num_workers=8,
+                rotate_clockwise_90=False):
     """Load images from folder or video and preprocess into a tensor.
 
     Returns:
@@ -87,6 +90,18 @@ def load_images(image_folder=None, video_path=None, fps=10, image_ext=".jpg,.png
         paths = paths[:first_k]
     if stride > 1:
         paths = paths[::stride]
+
+    if rotate_clockwise_90:
+        rotated_dir = tempfile.mkdtemp(prefix="lingbot_rot_cw90_")
+        rotated_paths = []
+        # Image.ROTATE_270 = lossless 90° clockwise (270° counter-clockwise) reordering.
+        for p in tqdm(paths, desc="Rotating images 90° CW"):
+            out_path = os.path.join(rotated_dir, os.path.basename(p))
+            Image.open(p).transpose(Image.ROTATE_270).save(out_path)
+            rotated_paths.append(out_path)
+        paths = rotated_paths
+        resolved_folder = rotated_dir
+        print(f"Rotated {len(paths)} images 90° clockwise → {rotated_dir}")
 
     print(f"Loading {len(paths)} images...")
     images = load_and_preprocess_images(
@@ -300,6 +315,9 @@ def main():
     parser.add_argument("--fps", type=int, default=10)
     parser.add_argument("--first_k", type=int, default=None)
     parser.add_argument("--stride", type=int, default=1)
+    parser.add_argument("--rotate_clockwise_90", action="store_true",
+                        help="Rotate source images 90° clockwise before preprocessing "
+                             "(crop/resize then operates on the rotated aspect ratio)")
 
     # Model
     parser.add_argument("--model_path", type=str, required=True)
@@ -318,28 +336,32 @@ def main():
         "--keyframe_interval",
         type=int,
         default=None,
-        help="Streaming only. Every N-th frame after scale frames is kept as a keyframe. 1 = every frame. "
-             "If unset, auto-selected: 1 when num_frames <= 320, else ceil(num_frames / 320).",
+        help="Every N-th frame after scale frames is kept as a keyframe. 1 = every frame. "
+            "Streaming: if unset, auto-selected (1 when num_frames <= 320, else ceil(num_frames / 320)) "
+            "to bound KV cache. Windowed: defaults to 1; --window_size counts keyframes, so values >1 "
+            "expand each window's actual-frame coverage to "
+            "scale_frames + (window_size - scale_frames) * keyframe_interval.",
     )
     parser.add_argument("--kv_cache_sliding_window", type=int, default=64)
     parser.add_argument("--camera_num_iterations", type=int, default=4,
                         help="Camera head iterative-refinement steps. Default 4; set 1 for faster inference "
-                             "(skips 3 refinement passes at a small accuracy cost).")
+                            "(skips 3 refinement passes at a small accuracy cost).")
     parser.add_argument("--use_sdpa", action="store_true", default=False,
                         help="Use SDPA backend (no flashinfer needed). Default: FlashInfer")
     parser.add_argument("--compile", action="store_true", default=False,
                         help="torch.compile hot modules (reduce-overhead) with a CUDA-graph warmup. "
-                             "Streaming mode only; ~5 FPS faster at 518x378. Adds ~30-60 s warmup time.")
+                            "Streaming mode only; ~5 FPS faster at 518x378. Adds ~30-60 s warmup time.")
     parser.add_argument(
         "--offload_to_cpu",
         action=argparse.BooleanOptionalAction,
-        help="Offload per-frame predictions to CPU during inference to cut GPU peak memory. "
-             "Use --no-offload_to_cpu to keep outputs on GPU.",
+        default=False,
+        help="Offload per-frame predictions to CPU during inference to cut GPU peak memory "
+            "(on by default).  Use --no-offload_to_cpu to keep outputs on GPU.",
     )
     # Windowed options
     parser.add_argument("--window_size", type=int, default=64, help="Frames per window (windowed mode)")
-    parser.add_argument("--overlap_size", type=int, default=16, help="Overlap between windows")
-
+    parser.add_argument("--overlap_size", type=int, default=16,
+                        help="Overlap between windows in *actual frames*")
 
     # Visualization
     parser.add_argument("--port", type=int, default=8080)
@@ -368,6 +390,7 @@ def main():
         image_folder=args.image_folder, video_path=args.video_path,
         fps=args.fps, first_k=args.first_k, stride=args.stride,
         image_size=args.image_size, patch_size=args.patch_size,
+        rotate_clockwise_90=args.rotate_clockwise_90,
     )
 
     # Export preprocessed images if requested
@@ -422,14 +445,22 @@ def main():
         else:
             args.keyframe_interval = 1
 
-    if args.mode != "streaming" and args.keyframe_interval != 1:
-        print("Warning: --keyframe_interval only applies to --mode streaming. Ignoring it for windowed inference.")
-        args.keyframe_interval = 1
-    elif args.mode == "streaming" and args.keyframe_interval > 1:
-        print(
-            f"Keyframe streaming enabled: interval={args.keyframe_interval} "
-            f"(after the first {args.num_scale_frames} scale frames)."
-        )
+    if args.keyframe_interval > 1:
+        if args.mode == "streaming":
+            print(
+                f"Keyframe streaming enabled: interval={args.keyframe_interval} "
+                f"(after the first {args.num_scale_frames} scale frames)."
+            )
+        else:  # windowed
+            actual_per_window = (
+                args.num_scale_frames
+                + max(0, args.window_size - args.num_scale_frames) * args.keyframe_interval
+            )
+            print(
+                f"Keyframe windowed enabled: interval={args.keyframe_interval}, "
+                f"each window covers up to {actual_per_window} actual frames "
+                f"(window_size={args.window_size} keyframes, scale={args.num_scale_frames})."
+            )
 
     # ── Optional: torch.compile + CUDA-graph warmup (streaming only) ────────
     if args.compile:
@@ -477,7 +508,8 @@ def main():
                 window_size=args.window_size,
                 overlap_size=args.overlap_size,
                 num_scale_frames=args.num_scale_frames,
-                output_device=output_device,
+                keyframe_interval=args.keyframe_interval,
+                output_device=output_device
             )
 
     print(f"Inference done in {time.time() - t0:.1f}s")
