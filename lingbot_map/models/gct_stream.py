@@ -18,6 +18,7 @@ from tqdm.auto import tqdm
 from lingbot_map.heads.camera_head import CameraCausalHead
 from lingbot_map.models.gct_base import GCTBase
 from lingbot_map.aggregator.stream import AggregatorStream
+from lingbot_map.utils.torch_compat import cudagraph_mark_step_begin
 
 logger = logging.getLogger(__name__)
 
@@ -417,7 +418,7 @@ class GCTStream(GCTBase):
         scale_images = images[:, :scale_frames].to(_model_device, non_blocking=True)
         # No-op unless hot modules were compiled with mode="reduce-overhead";
         # required then to reset CUDA-graph step state between replays.
-        torch.compiler.cudagraph_mark_step_begin()
+        cudagraph_mark_step_begin()
         scale_output = self.forward(
             scale_images,
             num_frame_for_scale=scale_frames,
@@ -452,7 +453,7 @@ class GCTStream(GCTBase):
             if not is_keyframe:
                 self._set_skip_append(True)
 
-            torch.compiler.cudagraph_mark_step_begin()
+            cudagraph_mark_step_begin()
             frame_output = self.forward(
                 frame_image,
                 num_frame_for_scale=scale_frames,  # Keep same for scale token logic

@@ -38,6 +38,7 @@ from tqdm.auto import tqdm
 from lingbot_map.utils.pose_enc import pose_encoding_to_extri_intri
 from lingbot_map.utils.geometry import closed_form_inverse_se3_general
 from lingbot_map.utils.load_fn import load_and_preprocess_images
+from lingbot_map.utils.torch_compat import cudagraph_mark_step_begin
 
 
 # =============================================================================
@@ -190,7 +191,7 @@ def _warm_streaming(model, images, scale_frames, warm_stream_n, dtype, passes=1)
 
     for _ in range(passes):
         model.clean_kv_cache()
-        torch.compiler.cudagraph_mark_step_begin()
+        cudagraph_mark_step_begin()
         with torch.no_grad(), torch.amp.autocast("cuda", dtype=dtype):
             model.forward(
                 warm_scale,
@@ -199,7 +200,7 @@ def _warm_streaming(model, images, scale_frames, warm_stream_n, dtype, passes=1)
                 causal_inference=True,
             )
         for i in range(warm_stream_n):
-            torch.compiler.cudagraph_mark_step_begin()
+            cudagraph_mark_step_begin()
             with torch.no_grad(), torch.amp.autocast("cuda", dtype=dtype):
                 model.forward(
                     warm_stream[:, i:i + 1],

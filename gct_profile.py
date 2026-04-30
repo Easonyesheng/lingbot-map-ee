@@ -16,6 +16,7 @@ import numpy as np
 import torch
 
 from lingbot_map.models.gct_stream import GCTStream
+from lingbot_map.utils.torch_compat import cudagraph_mark_step_begin
 
 
 # ============================================================================
@@ -99,7 +100,7 @@ def profile_streaming(model, images, num_frames, dtype, keyframe_interval=1):
     # `images` already lives on GPU.
     scale_batch = images[:, :scale_frames].to(device)
     start_ev.record()
-    torch.compiler.cudagraph_mark_step_begin()
+    cudagraph_mark_step_begin()
     with torch.no_grad(), autocast_ctx:
         model.forward(
             scale_batch,
@@ -120,7 +121,7 @@ def profile_streaming(model, images, num_frames, dtype, keyframe_interval=1):
             model._set_skip_append(True)
         frame = images[:, i:i + 1].to(device)  # outside the timed region
         start_ev.record()
-        torch.compiler.cudagraph_mark_step_begin()
+        cudagraph_mark_step_begin()
         with torch.no_grad(), autocast_ctx:
             model.forward(
                 frame,
@@ -321,7 +322,7 @@ def main():
                 """
                 for _ in range(passes):
                     m.clean_kv_cache()
-                    torch.compiler.cudagraph_mark_step_begin()
+                    cudagraph_mark_step_begin()
                     with torch.no_grad(), autocast_ctx:
                         m.forward(warm_scale, num_frame_for_scale=8,
                                   num_frame_per_block=8, causal_inference=True)
@@ -329,7 +330,7 @@ def main():
                         is_keyframe = (kf_int <= 1) or (i % kf_int == 0)
                         if not is_keyframe:
                             m._set_skip_append(True)
-                        torch.compiler.cudagraph_mark_step_begin()
+                        cudagraph_mark_step_begin()
                         with torch.no_grad(), autocast_ctx:
                             m.forward(warm_stream[:, i:i + 1], num_frame_for_scale=8,
                                       num_frame_per_block=1, causal_inference=True)
